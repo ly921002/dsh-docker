@@ -2,7 +2,7 @@
 
 没有官方镜像。上游只发 npm 包（`@deepseek-ai/dsh`）和源码，
 浏览器端产物打包在 `@deepseek-ai/dsh-web-frontend` 里，
-所以「自己做」= `node:24-slim` + 这个 npm 包。本目录就是完整的镜像与部署包。
+所以「自己做」= `node:24-bookworm-slim` + 这个 npm 包。本目录就是完整的镜像与部署包。
 
 > 重要：这套文件是在没有 Docker 的 Windows 机器上写的，**没有本地构建验证过**。
 > 请在 VPS 上按下面的顺序跑一遍；第一步 `docker compose config` 会先暴露语法问题。
@@ -13,7 +13,7 @@
 
 | 文件 | 作用 |
 | --- | --- |
-| `Dockerfile` | 镜像定义：node:24-slim + `@deepseek-ai/dsh`，无原生模块需重编 |
+| `Dockerfile` | 镜像定义：node:24-bookworm-slim + `@deepseek-ai/dsh`，无原生模块需重编 |
 | `docker-entrypoint.sh` | 解析容器自身 IP 作为绑定地址，拼 `dsh --profile web` 命令行 |
 | `healthcheck.sh` | 打容器自身地址的 `/`（前端静态回退位会返回 200） |
 | `docker-compose.yml` | 编排：数据卷、端口只绑 127.0.0.1、内存上限 |
@@ -37,7 +37,7 @@ sudo netfilter-persistent flush   # 或者: sudo iptables -F && sudo netfilter-p
 ```
 
 甲骨文免费档 ARM（A1.Flex，最高 4 OCPU/24 GB）完全够用；
-镜像基于 `node:24-slim-bookworm`，arm64 也能直接构建。
+镜像基于 `node:24-bookworm-slim`，arm64 也能直接构建。
 
 ---
 
@@ -45,13 +45,16 @@ sudo netfilter-persistent flush   # 或者: sudo iptables -F && sudo netfilter-p
 
 ```bash
 mkdir -p ~/dsh && cd ~/dsh
-# 把本目录的 6 个文件上传到这里
+git clone https://github.com/ly921002/dsh-docker.git .
 cp .env.example .env
 
 docker compose config          # 先做一次语法/变量展开检查
 docker compose up -d --build
 docker compose logs -f dsh     # 启动 URL 只打印一次，含进程凭据
 ```
+
+> 也可以直接用 GitHub Actions 已经构建好的镜像，省去本地编译：
+> `docker pull ghcr.io/ly921002/dsh-docker:latest`，用法见 [GHCR.md](GHCR.md)。
 
 首次启动会自动在 `./data/.dsh/profiles/web/` 生成 profile。
 **把 `docker compose logs` 里那行 `dsh web: http://...` 当密码看待** ——
@@ -116,6 +119,7 @@ sed -i 's/"127.0.0.1:${DSH_PORT/'"'"'${DSH_PORT/' docker-compose.yml   # 或者�
 
 ```bash
 cd ~/dsh
+git pull                       # 取最新代码/配置
 # 改 Dockerfile 的 DSH_VERSION / compose 的 build args，然后：
 docker compose build --pull
 docker compose up -d
@@ -123,6 +127,13 @@ docker compose up -d
 
 session 数据在 `./data` 卷里，重建镜像不丢。
 升级前建议 `cp -a data data.bak-$(date +%F)`。
+
+如果用 GHCR 上的镜像，升级就是：
+
+```bash
+sed -i 's#dsh-web:0.2.1-rc.3#ghcr.io/ly921002/dsh-docker:latest#' docker-compose.yml
+docker compose pull && docker compose up -d
+```
 
 ---
 
