@@ -9,7 +9,7 @@ package `@deepseek-ai/dsh`, which ships the prebuilt browser bundle inside
 
 | File | Purpose |
 | --- | --- |
-| [Dockerfile](Dockerfile) | `node:24-slim-bookworm` + pinned `@deepseek-ai/dsh`, plus tini, fonts and optional pwsh/python3 |
+| [Dockerfile](Dockerfile) | `node:24-bookworm-slim` + pinned `@deepseek-ai/dsh`, plus tini, fonts and optional pwsh/python3 |
 | [docker-entrypoint.sh](docker-entrypoint.sh) | Resolves a concrete bind address and assembles the `dsh --profile web` command line |
 | [healthcheck.sh](healthcheck.sh) | Probes the bind address (never loopback) once the SPA is up |
 | [docker-compose.yml](docker-compose.yml) | Publishes the port on 127.0.0.1 only, persists DSH state in `./data` |

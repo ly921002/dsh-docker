@@ -23,7 +23,10 @@
 #     linux engine package is published), so fonts are installed here.
 ###############################################################################
 
-ARG NODE_IMAGE=node:24-slim-bookworm
+# `node:24-slim-bookworm` is NOT a real tag (the build failed with
+# "docker.io/library/node:24-slim-bookworm: not found"); the correct one is
+# `node:24-bookworm-slim`.
+ARG NODE_IMAGE=node:24-bookworm-slim
 ARG DSH_VERSION=0.2.1-rc.3
 
 FROM ${NODE_IMAGE}

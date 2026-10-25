@@ -27,7 +27,9 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
   # Keep these in sync with the Dockerfile defaults. Bump DSH_VERSION here and
-  # in the Dockerfile together.
+  # in the Dockerfile together. `node:24-bookworm-slim` is the real tag --
+  # `node:24-slim-bookworm` does not exist on Docker Hub.
+  NODE_IMAGE: 'node:24-bookworm-slim'
   DSH_VERSION: '0.2.1-rc.3'
   INSTALL_PWSH: '0'
   INSTALL_PYTHON: '1'
@@ -60,6 +62,19 @@ jobs:
           else
             echo "value=linux/amd64,linux/arm64" >> "$GITHUB_OUTPUT"
           fi
+
+      # Node 24 on bookworm-slim. NOTE: `node:24-slim-bookworm` is NOT a valid
+      # tag (Docker Hub only has 24-bookworm-slim / 24-slim) -- using it makes
+      # the build fail at "load metadata for docker.io/library/node".
+      - name: Check base image tag
+        run: |
+          IMAGE="${NODE_IMAGE%%:*}"
+          TAG="${NODE_IMAGE##*:}"
+          if ! docker buildx imagetools inspect "$IMAGE:$TAG" >/dev/null 2>&1; then
+            echo "::error::base image $NODE_IMAGE does not exist on $IMAGE"
+            exit 1
+          fi
+          echo "base image $NODE_IMAGE resolves"
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -102,6 +117,7 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
+            NODE_IMAGE=${{ env.NODE_IMAGE }}
             DSH_VERSION=${{ env.DSH_VERSION }}
             INSTALL_PWSH=${{ env.INSTALL_PWSH }}
             INSTALL_PYTHON=${{ env.INSTALL_PYTHON }}
