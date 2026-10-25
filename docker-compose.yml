@@ -1,0 +1,72 @@
+###############################################################################
+# Self-built DSH web container.
+#
+#   cp .env.example .env   # then edit
+#   docker compose up -d --build
+#   docker compose logs -f dsh        # the startup URL is printed once
+#
+# Ports: bound to 127.0.0.1 on the host by default so nothing is exposed until
+# you put a reverse proxy in front. Change to "3080:3080" (or add a second
+# published port) only after reading the security notes in DEPLOY.md.
+###############################################################################
+
+services:
+  dsh:
+    build:
+      context: .
+      args:
+        DSH_VERSION: "0.2.1-rc.3"   # npm dist-tag `next` tracks rc.3; `latest` is rc.2
+        INSTALL_PWSH: "0"           # 1 only if a custom preset re-enables tool-pwsh
+        INSTALL_PYTHON: "1"
+    image: dsh-web:0.2.1-rc.3
+    container_name: dsh-web
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 30s
+
+    ports:
+      # Keep it on loopback and terminate TLS in a reverse proxy (recommended).
+      # Use "3080:3080" only with --public-url + --trusted-host, or better TLS.
+      - "127.0.0.1:${DSH_PORT:-3080}:${DSH_PORT:-3080}"
+
+    environment:
+      TZ: "${TZ:-Asia/Shanghai}"
+
+      # Persistent state. /data on the host keeps sessions, credentials and
+      # settings across image rebuilds.
+      DSH_HOME: /data/.dsh
+      DSH_AGENTS_HOME: /data/.agents
+
+      # Leave empty -> the entrypoint auto-detects the container's own IP.
+      # Never set 0.0.0.0 or :: (DSH rejects wildcard binds).
+      DSH_HOST: ""
+      DSH_PORT: "3080"
+
+      # Remote access. Set both together when you reach the container through
+      # a domain name or a public IP that is NOT the container's own address.
+      #   DSH_PUBLIC_URL: "https://dsh.example.com/"
+      #   DSH_TRUSTED_HOST: "dsh.example.com"
+      DSH_PUBLIC_URL: ""
+      DSH_TRUSTED_HOST: ""
+
+      # Optional native TLS inside the container (paths are relative to
+      # DSH_WORKSPACE=/workspace). Prefer a reverse proxy instead: DSH has no
+      # ACME client and never renews certificates.
+      # DSH_TLS_CERT: /workspace/tls/fullchain.pem
+      # DSH_TLS_KEY: /workspace/tls/privkey.pem
+
+    volumes:
+      # DSH state (sessions, credentials, settings, profile plugins)
+      - ./data:/data
+      # Default workspace root -- the directory the process runs in
+      - ./workspace:/workspace
+
+    # Oracle free-tier VMs can be small; give the LibreOfficeKit WASM engine
+    # room to breathe.
+    mem_limit: "${DSH_MEM_LIMIT:-2g}"
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
