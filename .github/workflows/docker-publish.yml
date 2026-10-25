@@ -1,0 +1,124 @@
+name: Publish Docker image
+
+# Builds the image from the Dockerfile in this repo and pushes it to
+# ghcr.io/ly921002/dsh-docker.
+#
+# First push of a new package name: GHCR creates the package PRIVATE. To share
+# it, open https://github.com/users/ly921002/packages/ghcr.io%2Fdsh-docker/settings
+# and change Package visibility to Public.
+#
+# Pull requests build only (no push), so this also acts as a smoke test.
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      platforms:
+        description: 'Target platforms (buildx syntax)'
+        required: false
+        default: 'linux/amd64,linux/arm64'
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+  # Keep these in sync with the Dockerfile defaults. Bump DSH_VERSION here and
+  # in the Dockerfile together.
+  DSH_VERSION: '0.2.1-rc.3'
+  INSTALL_PWSH: '0'
+  INSTALL_PYTHON: '1'
+
+jobs:
+  build-and-push:
+    name: Build and push
+    runs-on: ubuntu-latest
+
+    # GITHUB_TOKEN is enough; no PAT needed. packages: write is required for
+    # ghcr.io pushes, and is only granted on this job (not globally).
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # The runtime tree is pure JS (no native addons), so cross-arch builds
+      # are just slow under emulation -- they do not need per-platform logic.
+      # Drop linux/arm64 here if build time matters more than Oracle Ampere
+      # support.
+      - name: Resolve platforms
+        id: platforms
+        run: |
+          if [ "${{ github.event_name }}" = 'workflow_dispatch' ] \
+             && [ -n "${{ github.event.inputs.platforms }}" ]; then
+            echo "value=${{ github.event.inputs.platforms }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=linux/amd64,linux/arm64" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to ${{ env.REGISTRY }}
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Produces the tag/label set: branch name, semver from v* tags, a short
+      # sha, and `latest` only on the default branch.
+      - name: Extract image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          flavor: |
+            latest=auto
+          tags: |
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,format=short
+            type=raw,value=latest,enable=${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+
+      - name: Build ${{ steps.meta.outputs.tags }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: ${{ steps.platforms.outputs.value }}
+          # PRs build without exporting or pushing; pushes go to the registry.
+          push: ${{ github.event_name != 'pull_request' }}
+          load: false
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            DSH_VERSION=${{ env.DSH_VERSION }}
+            INSTALL_PWSH=${{ env.INSTALL_PWSH }}
+            INSTALL_PYTHON=${{ env.INSTALL_PYTHON }}
+          cache-from: type=gha,scope=${{ github.workflow }}
+          cache-to: type=gha,mode=max
+
+      - name: Report
+        if: github.event_name != 'pull_request'
+        run: |
+          {
+            echo '### Published image'
+            echo
+            echo 'Registry: `'"${{ env.REGISTRY }}"'`'
+            echo
+            echo '```'
+            echo '${{ steps.meta.outputs.tags }}'
+            echo '```'
+            echo
+            echo 'Digest: `${{ steps.meta.outputs.digest }}`'
+          } >> "$GITHUB_STEP_SUMMARY"
