@@ -20,6 +20,7 @@ services:
         INSTALL_PYTHON: "1"
     image: dsh-web:0.2.1-rc.3
     container_name: dsh-web
+    user: "0:0" 
     init: true
     restart: unless-stopped
     stop_grace_period: 30s
@@ -41,7 +42,7 @@ services:
       # Never set 0.0.0.0 or :: (DSH rejects wildcard binds).
       DSH_HOST: ""
       DSH_PORT: "3080"
-
+      DEEPSEEK_API_KEY: "${DEEPSEEK_API_KEY:-sk}"
       # Remote access. Set both together when you reach the container through
       # a domain name or a public IP that is NOT the container's own address.
       #   DSH_PUBLIC_URL: "https://dsh.example.com/"
