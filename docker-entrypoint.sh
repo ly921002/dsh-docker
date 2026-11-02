@@ -80,6 +80,13 @@ if [ -n "${DSH_EXTRA_ARGS:-}" ]; then
     eval "set -- \"\$@\" $DSH_EXTRA_ARGS"
 fi
 
+VER_FILE="${DSH_INSTALLED_VERSION_FILE:-/usr/local/share/dsh/version.txt}"
+if [ -r "$VER_FILE" ]; then
+    log "dsh       : $(cat "$VER_FILE") (from $VER_FILE)"
+elif command -v dsh >/dev/null 2>&1; then
+    log "dsh       : $(dsh --version 2>/dev/null || echo unknown)"
+fi
+
 log "workspace : $DSH_WORKSPACE"
 log "dsh home  : ${DSH_HOME:-$HOME/.dsh}"
 log "agents    : ${DSH_AGENTS_HOME:-$HOME/.agents}"

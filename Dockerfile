@@ -27,13 +27,25 @@
 # "docker.io/library/node:24-slim-bookworm: not found"); the correct one is
 # `node:24-bookworm-slim`.
 ARG NODE_IMAGE=node:24-bookworm-slim
-ARG DSH_VERSION=0.2.1-rc.3
+# Default pin. Set to `latest` (or any dist-tag) to float on upstream npm.
+# The CI workflow overrides this on every scheduled run, so the value here is
+# only the fallback for local builds.
+ARG DSH_VERSION=0.2.1-rc.5
 
 FROM ${NODE_IMAGE}
 
 ARG DSH_VERSION
 ARG INSTALL_PWSH=0
 ARG INSTALL_PYTHON=1
+
+# Records the requested ref. The concrete resolved version goes into
+# /usr/local/share/dsh/version.txt below; the published image additionally gets
+# an io.dsh.dsh-version label stamped by the publish workflow (metadata-action),
+# which is what the scheduled rebuild compares against npm.
+LABEL org.opencontainers.image.title="dsh-web" \
+      org.opencontainers.image.description="DeepSeek Harness web profile, built from the @deepseek-ai/dsh npm package" \
+      org.opencontainers.image.source="https://github.com/ly921002/dsh-docker" \
+      org.opencontainers.image.version="${DSH_VERSION}"
 
 ENV DEBIAN_FRONTEND=noninteractive \
     DSH_HOME=/data/.dsh \
@@ -70,8 +82,39 @@ RUN set -eu; \
 # pnpm is installed too: `dsh plugin --profile web <pnpm args>` forwards to
 # pnpm inside the profile directory, and out-of-tree plugins are installed
 # into $DSH_HOME/profiles/web/node_modules.
-RUN npm install -g "@deepseek-ai/dsh@${DSH_VERSION}" "pnpm@10" \
- && npm cache clean --force
+#
+# DSH_VERSION may be a concrete version (0.2.1-rc.5) or a dist-tag (latest,
+# next, alpha). Either way the version actually installed is frozen into
+# /usr/local/share/dsh/version.txt so the running container can report exactly
+# what it is -- a dist-tag build would otherwise be unreproducible after the
+# fact.
+#
+# Two details that are easy to get wrong here:
+#   * An empty build arg (compose passes DSH_VERSION="" to mean "use the
+#     default") must not become `npm install @deepseek-ai/dsh@`, which npm
+#     rejects -- hence the normalisation to `latest`.
+#   * The version is read with sed off the installed package.json rather than
+#     `node -e`. A node one-liner here needs both single and double quotes
+#     inside a single-quoted shell argument, which is fragile; sed has no such
+#     problem.
+RUN set -eu; \
+    VER="${DSH_VERSION}"; \
+    if [ -z "$VER" ]; then VER=latest; fi; \
+    echo "installing @deepseek-ai/dsh@$VER"; \
+    npm install -g "@deepseek-ai/dsh@${VER}" "pnpm@10"; \
+    mkdir -p /usr/local/share/dsh; \
+    ROOT="$(npm root -g)"; \
+    RESOLVED="$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+        "$ROOT/@deepseek-ai/dsh/package.json" | head -n1)"; \
+    if [ -z "$RESOLVED" ]; then RESOLVED=unknown; fi; \
+    printf '%s\n' "$RESOLVED" > /usr/local/share/dsh/version.txt; \
+    echo "resolved @deepseek-ai/dsh $RESOLVED"; \
+    npm cache clean --force
+
+# The resolved version, readable at runtime (see docker-entrypoint.sh). The
+# image label cannot interpolate a runtime value, so the file is the source of
+# truth inside the container.
+ENV DSH_INSTALLED_VERSION_FILE=/usr/local/share/dsh/version.txt
 
 COPY --chown=node:node docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 COPY --chown=node:node healthcheck.sh /usr/local/bin/healthcheck.sh

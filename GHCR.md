@@ -15,6 +15,12 @@ Tags published: `latest` (default branch), the branch name, the short commit
 sha, and `v<version>` / `v<major>.<minor>` for `v*` tags. Pin the sha in
 production if you want reproducible pulls.
 
+**`latest` is rebuilt automatically whenever upstream publishes a new
+`@deepseek-ai/dsh`.** The workflow runs daily, resolves npm's `latest`
+dist-tag, and skips the build when the published image already carries that
+version in its `io.dsh.dsh-version` label. So `docker compose pull` is a real
+upgrade, not a no-op.
+
 On the Oracle VPS this replaces the `build:` section entirely:
 
 ```yaml

@@ -49,12 +49,13 @@ git clone https://github.com/ly921002/dsh-docker.git .
 cp .env.example .env
 
 docker compose config          # 先做一次语法/变量展开检查
-docker compose up -d --build
+docker compose up -d           # 直接拉 CI 构建好的镜像（推荐）
+# 或者本地构建：docker compose build --pull && docker compose up -d
 docker compose logs -f dsh     # 启动 URL 只打印一次，含进程凭据
 ```
 
-> 也可以直接用 GitHub Actions 已经构建好的镜像，省去本地编译：
-> `docker pull ghcr.io/ly921002/dsh-docker:latest`，用法见 [GHCR.md](GHCR.md)。
+> 镜像已在 GHCR 上：`ghcr.io/ly921002/dsh-docker:latest`，amd64 / arm64 双架构都有，
+> 用法见 [GHCR.md](GHCR.md)。compose 文件默认就走这条路径，不需要 build。
 
 首次启动会自动在 `./data/.dsh/profiles/web/` 生成 profile。
 **把 `docker compose logs` 里那行 `dsh web: http://...` 当密码看待** ——
@@ -117,23 +118,91 @@ sed -i 's/"127.0.0.1:${DSH_PORT/'"'"'${DSH_PORT/' docker-compose.yml   # 或者�
 
 ## 5. 升级
 
+**关键前提**：能移动的是 npm 包，不是镜像。仓库里钉的版本号只是本地构建的兜底值，
+真正的升级由 CI 每天比对 npm 后重建镜像完成，所以你不需要手工改版本号。
+
+### 方案 1：手动拉取（默认推荐）
+
 ```bash
 cd ~/dsh
-git pull                       # 取最新代码/配置
-# 改 Dockerfile 的 DSH_VERSION / compose 的 build args，然后：
-docker compose build --pull
+./scripts/upgrade.sh          # 备份建议 + pull + recreate + 前后版本对比
+```
+
+等价于：
+
+```bash
+cp -a data data.bak-$(date +%F)
+docker compose pull && docker compose up -d
+```
+
+`./scripts/upgrade.sh --check` 只报当前版本、不动任何东西。
+
+### 方案 2：自动跟随（watchtower）
+
+```bash
+docker compose --profile auto-update up -d
+```
+
+compose 文件里已内置 `auto-update` 服务，只对带
+`com.centurylinklabs.watchtower.enable=true` 标签的容器生效（即 `dsh`），
+不会碰宿主机上其它容器。默认每 3600 秒检查一次，可在 `.env` 里改：
+
+```ini
+AUTO_UPDATE_INTERVAL=3600
+```
+
+**代价**：重建容器会终止正在跑的 agent 会话。长会话场景建议用方案 1，挑空闲时手动升。
+
+### 方案 3：本地构建
+
+```bash
+cd ~/dsh
+git pull
+docker compose build --pull          # 用 Dockerfile 里的默认版本
 docker compose up -d
 ```
 
-session 数据在 `./data` 卷里，重建镜像不丢。
-升级前建议 `cp -a data data.bak-$(date +%F)`。
-
-如果用 GHCR 上的镜像，升级就是：
+指定版本：
 
 ```bash
-sed -i 's#dsh-web:0.2.1-rc.3#ghcr.io/ly921002/dsh-docker:latest#' docker-compose.yml
+DSH_VERSION=0.2.1-rc.5 docker compose build
+docker compose up -d
+```
+
+### 确认当前跑的是哪个版本
+
+```bash
+./scripts/upgrade.sh --check
+```
+
+或分别查：
+
+```bash
+docker exec dsh-web cat /usr/local/share/dsh/version.txt
+docker inspect --format '{{ index .Config.Labels "io.dsh.dsh-version" }}' dsh-web
+```
+
+镜像里的 `/usr/local/share/dsh/version.txt` 记录的是 `npm install` 之后
+**实际解析到的**版本，不是你在 build arg 里写的那个 ref——所以用 dist-tag 构建时也能查到确切版本。
+
+### 回滚
+
+CI 给每次构建打三类标签：分支名（`main`）、短 commit sha（`sha-aa6d952`）、
+`v<version>`（只有打 `v*` tag 才有）。回滚就是改用旧标签：
+
+```bash
+# 1. 看有哪些标签可用（不需要 docker login，公开包匿名可读）
+node scripts/image-label.mjs --tags ghcr.io/ly921002/dsh-docker
+
+# 2. 在 .env 里指向旧标签
+sed -i 's#^DSH_IMAGE=.*#DSH_IMAGE=ghcr.io/ly921002/dsh-docker:sha-aa6d952#' .env
+
+# 3. 重建
 docker compose pull && docker compose up -d
 ```
+
+用 sha 标签最精确（分支名和 `latest` 都会移动）。
+数据在 `./data` 卷里，回滚镜像不影响会话与凭据。
 
 ---
 
@@ -155,7 +224,8 @@ docker compose pull && docker compose up -d
   属于可选功能，容器里没开，无需额外处理。
 - **没有遥测**：`desktop-product-telemetry` / `product-analytics` 行只在
   `profileContext.name === 'desktop'` 时启用，web profile 下是关闭的。
-- **版本**：当前 `0.2.1-rc.3` 是开发者预览，npm `latest` 还停在 `rc.2`
-  （`next` tag 才是 rc.3）。Dockerfile 里显式钉了 rc.3，想跟桌面版一致就保持这个值；
-  想稳一点改成 `0.2.1-rc.2`。
+- **版本**：Dockerfile 默认 `0.2.1-rc.5`，与 npm `latest` 一致
+  （`next` 同为 rc.5，`alpha` 通道是 `0.2.2-alpha.2`）。这个默认值只是本地构建兜底；
+  CI 每天会重新解析 npm 上的 `latest` 并在有变化时重建镜像，所以不需要手工跟版本。
+  `/usr/local/share/dsh/version.txt` 里记录的是实际装上的版本。
 - **DSH 没有 ACME 客户端，也不会自动续期证书**。长期跑请用反代（方案 A）。

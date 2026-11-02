@@ -2,8 +2,18 @@
 # Self-built DSH web container.
 #
 #   cp .env.example .env   # then edit
-#   docker compose up -d --build
-#   docker compose logs -f dsh        # the startup URL is printed once
+#   docker compose up -d                     # uses the GHCR image (tracks upstream)
+#   docker compose up -d --build             # or build locally from ./Dockerfile
+#   docker compose logs -f dsh               # the startup URL is printed once
+#
+# Keeping DSH current:
+#   docker compose pull && docker compose up -d            # one-shot upgrade
+#   docker compose --profile auto-update up -d             # upgrade on a timer
+#
+# Note: `image:` and `build:` are both present on purpose. `up -d` pulls the
+# image; `up -d --build` rebuilds from the Dockerfile and tags it with the same
+# name. That means a local build silently overrides the CI image on this host --
+# pick one workflow and stick to it.
 #
 # Ports: bound to 127.0.0.1 on the host by default so nothing is exposed until
 # you put a reverse proxy in front. Change to "3080:3080" (or add a second
@@ -15,10 +25,20 @@ services:
     build:
       context: .
       args:
-        DSH_VERSION: "0.2.1-rc.3"   # npm dist-tag `next` tracks rc.3; `latest` is rc.2
+        # Which @deepseek-ai/dsh to install when building locally. Accepts a
+        # concrete version or a dist-tag. `latest` keeps a local build in sync
+        # with what CI publishes; set e.g. DSH_VERSION=0.2.1-rc.5 in .env to
+        # pin one. Only consulted by `docker compose build` -- the image path
+        # does not use it.
+        DSH_VERSION: "${DSH_VERSION:-latest}"
         INSTALL_PWSH: "0"           # 1 only if a custom preset re-enables tool-pwsh
         INSTALL_PYTHON: "1"
-    image: dsh-web:0.2.1-rc.3
+    # Default: pull the image CI publishes on every upstream release. Run
+    # `docker compose pull && docker compose up -d` to upgrade, or enable the
+    # `auto-update` profile below to do it on a timer.
+    # To build locally instead, comment out `image:` and use
+    #   docker compose up -d --build
+    image: ${DSH_IMAGE:-ghcr.io/ly921002/dsh-docker:latest}
     container_name: dsh-web
     user: "0:0" 
     init: true
@@ -71,3 +91,43 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+
+    labels:
+      # Read by the optional watchtower service below. It is the only container
+      # it is allowed to touch.
+      com.centurylinklabs.watchtower.enable: "true"
+
+  # ---------------------------------------------------------------------------
+  # Optional automatic upgrade. Off by default; start it with
+  #
+  #   docker compose --profile auto-update up -d
+  #
+  # It polls ghcr.io every AUTO_UPDATE_INTERVAL seconds and, when a newer
+  # `latest` digest appears, pulls it and recreates ONLY the dsh container.
+  # Your ./data volume (sessions, credentials, plugins) survives the swap.
+  #
+  # Caveat worth knowing before enabling: a recreate kills running agent
+  # sessions. Anything still streaming when the image lands is lost. If that
+  # matters, leave the profile off and upgrade by hand at a quiet moment.
+  # ---------------------------------------------------------------------------
+  auto-update:
+    image: containrrr/watchtower:latest
+    container_name: dsh-auto-update
+    profiles: ["auto-update"]
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      # Only containers carrying the watchtower.enable label (i.e. dsh) are
+      # considered, so this never restarts anything else on the host.
+      WATCHTOWER_LABEL_ENABLE: "true"
+      WATCHTOWER_CLEANUP: "true"
+      WATCHTOWER_ROLLING_RESTART: "false"
+      WATCHTOWER_TIMEOUT: 30s
+    command: --interval ${AUTO_UPDATE_INTERVAL:-3600}
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
