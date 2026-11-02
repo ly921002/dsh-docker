@@ -21,22 +21,103 @@ on:
         description: 'Target platforms (buildx syntax)'
         required: false
         default: 'linux/amd64,linux/arm64'
+      dsh_version:
+        description: 'Override @deepseek-ai/dsh version/dist-tag (empty = resolve from npm)'
+        required: false
+        default: ''
+  # Keeps the image tracking upstream npm. Every run resolves the current
+  # `latest` (or NPM_DIST_TAG) and compares it with the version baked into the
+  # most recent image; it only builds when they differ, so idle days cost a
+  # single npm metadata request.
+  schedule:
+    - cron: '17 3 * * *'
 
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
 
-  # Keep these in sync with the Dockerfile defaults. Bump DSH_VERSION here and
-  # in the Dockerfile together. `node:24-bookworm-slim` is the real tag --
-  # `node:24-slim-bookworm` does not exist on Docker Hub.
+  # Which npm dist-tag to follow. `latest` is the stable channel: it currently
+  # resolves to 0.2.1-rc.5. Use `next` for the same preview line, or `alpha`
+  # for 0.2.2-alpha.x. This single value drives both the scheduled upgrade and
+  # the manual build.
+  NPM_DIST_TAG: 'latest'
+
+  # `node:24-bookworm-slim` is the real tag -- `node:24-slim-bookworm` does not
+  # exist on Docker Hub.
   NODE_IMAGE: 'node:24-bookworm-slim'
-  DSH_VERSION: '0.2.1-rc.3'
   INSTALL_PWSH: '0'
   INSTALL_PYTHON: '1'
 
 jobs:
+  # ---------------------------------------------------------------------------
+  # Resolve which @deepseek-ai/dsh version to build, and decide whether it is
+  # worth building at all. Runs on every trigger; costs one npm metadata call.
+  # ---------------------------------------------------------------------------
+  resolve:
+    name: Resolve upstream version
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      should_build: ${{ steps.v.outputs.should_build }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve version and compare with the published image
+        id: v
+        env:
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          # Manual override wins; otherwise follow NPM_DIST_TAG.
+          REQ="${{ github.event.inputs.dsh_version }}"
+          if [ -z "$REQ" ]; then REQ="$NPM_DIST_TAG"; fi
+          RESOLVED="$(npm view "@deepseek-ai/dsh@${REQ}" version --silent | tail -n1)"
+          if [ -z "$RESOLVED" ]; then
+            echo "::error::could not resolve @deepseek-ai/dsh@${REQ} from npm"
+            exit 1
+          fi
+          echo "requested=$REQ resolved=$RESOLVED"
+          echo "version=$RESOLVED" >> "$GITHUB_OUTPUT"
+
+          # Scheduled runs exist purely to catch upstream releases, so skip the
+          # (expensive, multi-arch) build when the published image already
+          # carries this exact version in its io.dsh.dsh-version label.
+          #
+          # scripts/image-label.mjs walks index -> platform manifest -> config
+          # blob over the registry HTTP API. `docker buildx imagetools inspect
+          # --format` cannot do this: an index has no config object.
+          SHOULD=1
+          if [ "${{ github.event_name }}" = 'schedule' ]; then
+            BAKED="$(node scripts/image-label.mjs \
+              "${REGISTRY}/${IMAGE_NAME}:latest" \
+              io.dsh.dsh-version 2>/dev/null || true)"
+            echo "published image is on ${BAKED:-<unknown>}"
+            if [ "$BAKED" = "$RESOLVED" ]; then
+              echo "image already on $RESOLVED -- skipping build"
+              SHOULD=0
+            fi
+          fi
+          echo "should_build=$SHOULD" >> "$GITHUB_OUTPUT"
+
+      - name: Report
+        run: |
+          {
+            echo "### Upstream resolution"
+            echo
+            echo "- requested: \`${{ steps.v.outputs.version }}\`"
+            echo "- build: \`${{ steps.v.outputs.should_build }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
   build-and-push:
     name: Build and push
+    needs: resolve
+    if: needs.resolve.outputs.should_build == '1'
     runs-on: ubuntu-latest
 
     # GITHUB_TOKEN is enough; no PAT needed. packages: write is required for
@@ -105,6 +186,8 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=sha,format=short
             type=raw,value=latest,enable=${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+          labels: |
+            io.dsh.dsh-version=${{ needs.resolve.outputs.version }}
 
       - name: Build ${{ steps.meta.outputs.tags }}
         uses: docker/build-push-action@v6
@@ -118,7 +201,7 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             NODE_IMAGE=${{ env.NODE_IMAGE }}
-            DSH_VERSION=${{ env.DSH_VERSION }}
+            DSH_VERSION=${{ needs.resolve.outputs.version }}
             INSTALL_PWSH=${{ env.INSTALL_PWSH }}
             INSTALL_PYTHON=${{ env.INSTALL_PYTHON }}
           cache-from: type=gha,scope=${{ github.workflow }}
