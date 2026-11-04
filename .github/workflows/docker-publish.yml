@@ -30,7 +30,7 @@ on:
   # most recent image; it only builds when they differ, so idle days cost a
   # single npm metadata request.
   schedule:
-    - cron: '17 3 * * *'
+    - cron: '10 0 * * *'
 
 env:
   REGISTRY: ghcr.io
