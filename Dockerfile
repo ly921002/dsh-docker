@@ -30,7 +30,7 @@ ARG NODE_IMAGE=node:24-bookworm-slim
 # Default pin. Set to `latest` (or any dist-tag) to float on upstream npm.
 # The CI workflow overrides this on every scheduled run, so the value here is
 # only the fallback for local builds.
-ARG DSH_VERSION=0.2.1-rc.5
+ARG DSH_VERSION=0.2.2-rc.1
 
 FROM ${NODE_IMAGE}
 
