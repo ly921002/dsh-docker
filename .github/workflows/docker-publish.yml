@@ -40,7 +40,7 @@ env:
   # resolves to 0.2.1-rc.5. Use `next` for the same preview line, or `alpha`
   # for 0.2.2-alpha.x. This single value drives both the scheduled upgrade and
   # the manual build.
-  NPM_DIST_TAG: 'latest'
+  NPM_DIST_TAG: 'next'
 
   # `node:24-bookworm-slim` is the real tag -- `node:24-slim-bookworm` does not
   # exist on Docker Hub.
